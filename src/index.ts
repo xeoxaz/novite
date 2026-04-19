@@ -1,3 +1,6 @@
-import { log } from "./log/log";
+import { Log } from "./log/log";
+let log = new Log("Main");
 
-console.log(log());
+log.ok("This message is ok!");
+log.warn("This is a warning!");
+log.error("This is an error!");
