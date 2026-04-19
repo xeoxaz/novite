@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Novite Investigation Canvas</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="overlay-brand" aria-label="Project name">Novite</div>
+  <div class="overlay-credit">
+    Created by: Xeoxaz
+    <a href="https://github.com/xeoxaz" target="_blank" rel="noopener noreferrer">github.com/xeoxaz</a>
+  </div>
+
+  <main class="canvas-wrap">
+    <canvas id="board"></canvas>
+    <div id="contextMenu" class="context-menu hidden"></div>
+  </main>
+
+  <aside id="nodeInspector" class="panel node-inspector">
+    <h1>Node Inspector</h1>
+    <p class="muted">Select a node to view and edit details.</p>
+
+    <div class="group">
+      <label>Entity Type</label>
+      <select id="entityType">
+        <option value="person">Person</option>
+        <option value="evidence">Evidence</option>
+        <option value="event">Event</option>
+        <option value="concept">Concept</option>
+      </select>
+    </div>
+
+    <div class="group">
+      <label>Link Type</label>
+      <select id="linkType">
+        <option value="fact">Fact</option>
+        <option value="theory">Theory</option>
+        <option value="contradiction">Contradiction</option>
+        <option value="weak">Weak Link</option>
+      </select>
+    </div>
+
+    <div class="group" id="nodeEditorGroup">
+      <p class="editor-title">Selected Node</p>
+      <p id="selectedNodeMeta" class="muted small">No node selected</p>
+
+      <label for="selectedNodeType">Type</label>
+      <select id="selectedNodeType">
+        <option value="person">Person</option>
+        <option value="evidence">Evidence</option>
+        <option value="event">Event</option>
+        <option value="concept">Concept</option>
+      </select>
+
+      <label for="selectedNodeTitle">Title</label>
+      <input id="selectedNodeTitle" type="text" placeholder="Node title" />
+
+      <label for="selectedNodeNotes">Notes</label>
+      <textarea id="selectedNodeNotes" rows="3" placeholder="Node notes"></textarea>
+
+      <p id="selectedNodeScreenshotHint" class="muted small">Drag and drop an image onto a node to attach a screenshot.</p>
+      <img id="selectedNodeScreenshot" class="node-screenshot hidden" alt="Node screenshot" />
+      <button id="selectedNodeRemoveScreenshot" type="button">Remove Screenshot</button>
+
+      <div class="editor-grid">
+        <div>
+          <label for="selectedNodeX">X</label>
+          <input id="selectedNodeX" type="number" />
+        </div>
+        <div>
+          <label for="selectedNodeY">Y</label>
+          <input id="selectedNodeY" type="number" />
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <p id="statusLine" class="status">Ready</p>
+      <p class="muted small">Controls: drag node to move, drag background to pan, wheel to zoom, double-click node to rename, right-click board/node for context menu.</p>
+    </div>
+  </aside>
+
+  <div id="imageViewerModal" class="image-viewer hidden" role="dialog" aria-modal="true">
+    <div class="image-viewer-inner">
+      <button id="imageViewerClose" class="image-viewer-close" type="button">Close</button>
+      <img id="imageViewerImage" class="image-viewer-image" alt="Node screenshot preview" />
+    </div>
+  </div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
