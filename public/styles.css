@@ -39,6 +39,38 @@ body {
   user-select: none;
 }
 
+.overlay-brand-link {
+  display: inline-block;
+  text-decoration: none;
+  color: #dbe9ff;
+}
+
+.overlay-brand-link:hover {
+  color: #ffffff;
+  border-color: #5d84d2;
+}
+
+.overlay-status {
+  position: fixed;
+  top: 50px;
+  left: 14px;
+  z-index: 26;
+  max-width: min(430px, 70vw);
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid #2e508f;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(12, 25, 52, 0.92) 0%, rgba(8, 17, 36, 0.92) 100%);
+  color: #9fc0ff;
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: 0.2px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .overlay-credit {
   position: fixed;
   left: 14px;
@@ -170,6 +202,13 @@ button {
 textarea {
   resize: vertical;
   min-height: 70px;
+}
+
+textarea.note-body-editor {
+  min-height: 500px;
+  max-height: 500px;
+  overflow-y: auto;
+  resize: none;
 }
 
 button {

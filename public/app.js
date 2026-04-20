@@ -4,6 +4,7 @@ const ctx = canvas.getContext("2d");
 const entityTypeEl = document.getElementById("entityType");
 const linkTypeEl = document.getElementById("linkType");
 const statusLineEl = document.getElementById("statusLine");
+const globalStatusEl = document.getElementById("globalStatus");
 const contextMenuEl = document.getElementById("contextMenu");
 const imageViewerModalEl = document.getElementById("imageViewerModal");
 const imageViewerImageEl = document.getElementById("imageViewerImage");
@@ -16,14 +17,23 @@ const selectedNodeNotesEl = document.getElementById("selectedNodeNotes");
 const selectedNodeScreenshotHintEl = document.getElementById("selectedNodeScreenshotHint");
 const selectedNodeScreenshotEl = document.getElementById("selectedNodeScreenshot");
 const selectedNodeRemoveScreenshotEl = document.getElementById("selectedNodeRemoveScreenshot");
+const selectedNodeToggleCollapseEl = document.getElementById("selectedNodeToggleCollapse");
 const selectedNodeXEl = document.getElementById("selectedNodeX");
 const selectedNodeYEl = document.getElementById("selectedNodeY");
+const entityTypeGroupEl = document.getElementById("entityTypeGroup");
+const linkTypeGroupEl = document.getElementById("linkTypeGroup");
+const nodeEditorGroupEl = document.getElementById("nodeEditorGroup");
+const linkEditorGroupEl = document.getElementById("linkEditorGroup");
+const selectedLinkMetaEl = document.getElementById("selectedLinkMeta");
+const selectedLinkTypeEl = document.getElementById("selectedLinkType");
+const selectedLinkBreakEl = document.getElementById("selectedLinkBreak");
 const MASTER_BOARD_ID = "master";
 const screenshotCache = new Map();
 
 const nodeSize = { w: 180, h: 78 };
 const screenshotNodeLandscapeSize = { w: 250, h: 210 };
 const screenshotNodePortraitSize = { w: 220, h: 300 };
+const noteNodeSize = { w: 320, h: 310 };
 const SNAP_DISTANCE = 14;
 const SNAP_GAP = 5;
 
@@ -32,6 +42,7 @@ const colors = {
   evidence: "#c58cff",
   event: "#ffc97b",
   concept: "#79e0a7",
+  note: "#ffe08a",
   fact: "#6fe78f",
   theory: "#79a7ff",
   contradiction: "#ff7b9d",
@@ -42,7 +53,12 @@ let state = {
   board: {
     _id: MASTER_BOARD_ID,
     entities: [],
-    links: []
+    links: [],
+    camera: {
+      x: 0,
+      y: 0,
+      zoom: 1
+    }
   },
   camera: {
     x: 0,
@@ -61,6 +77,7 @@ let state = {
   },
   selectedNodeId: null,
   selectedNodeIds: [],
+  selectedLinkId: null,
   pointerStart: { x: 0, y: 0 },
   cameraStart: { x: 0, y: 0 },
   connectMode: false,
@@ -78,6 +95,11 @@ let state = {
 
 function setStatus(text) {
   statusLineEl.textContent = text;
+
+  if (globalStatusEl) {
+    const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    globalStatusEl.textContent = `${time} - ${text}`;
+  }
 }
 
 function updateCanvasCursor() {
@@ -100,6 +122,23 @@ function disableConnectMode(message = "Connect mode disabled") {
   state.contextMenu.connectFromId = null;
   updateCanvasCursor();
   setStatus(message);
+}
+
+function normalizeCameraInput(input, fallback = { x: 0, y: 0, zoom: 1 }) {
+  if (!input || typeof input !== "object") {
+    return { ...fallback };
+  }
+
+  const candidate = input;
+  const x = Number(candidate.x);
+  const y = Number(candidate.y);
+  const zoom = Number(candidate.zoom);
+
+  return {
+    x: Number.isFinite(x) ? x : fallback.x,
+    y: Number.isFinite(y) ? y : fallback.y,
+    zoom: Number.isFinite(zoom) ? Math.max(0.2, Math.min(2.4, zoom)) : fallback.zoom
+  };
 }
 
 function hideContextMenu() {
@@ -143,6 +182,7 @@ function zoomToNode(node, zoomTarget = 1.5) {
   state.camera.x = canvas.clientWidth / 2 - nodeCenterX * clampedZoom;
   state.camera.y = canvas.clientHeight / 2 - nodeCenterY * clampedZoom;
   draw();
+  queueSave();
 }
 
 function resizeCanvas() {
@@ -168,12 +208,34 @@ function worldToScreen(x, y) {
   };
 }
 
+function formatTimestamp(value) {
+  if (!value) {
+    return "unknown";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return date.toLocaleString();
+}
+
 function getSelectedNode() {
   if (!state.selectedNodeId) {
     return null;
   }
 
   return state.board.entities.find(entity => entity.id === state.selectedNodeId) ?? null;
+}
+
+function getSelectedLink() {
+  if (!state.selectedLinkId) {
+    return null;
+  }
+
+  return state.board.links.find(link => link.id === state.selectedLinkId) ?? null;
 }
 
 function isNodeSelected(nodeId) {
@@ -183,6 +245,7 @@ function isNodeSelected(nodeId) {
 function setSelection(nodeIds, primaryId = null) {
   const uniqueIds = [...new Set(nodeIds)];
   state.selectedNodeIds = uniqueIds;
+  state.selectedLinkId = null;
 
   if (primaryId && uniqueIds.includes(primaryId)) {
     state.selectedNodeId = primaryId;
@@ -197,6 +260,21 @@ function setSelection(nodeIds, primaryId = null) {
 function clearSelection() {
   state.selectedNodeIds = [];
   state.selectedNodeId = null;
+  state.selectedLinkId = null;
+  renderSelectedNodeEditor();
+  draw();
+}
+
+function setSelectedLink(linkId) {
+  const link = state.board.links.find(item => item.id === linkId);
+
+  if (!link) {
+    return;
+  }
+
+  state.selectedLinkId = link.id;
+  state.selectedNodeId = null;
+  state.selectedNodeIds = [];
   renderSelectedNodeEditor();
   draw();
 }
@@ -337,6 +415,7 @@ function setNodeEditorEnabled(enabled) {
   selectedNodeTitleEl.disabled = !enabled;
   selectedNodeNotesEl.disabled = !enabled;
   selectedNodeRemoveScreenshotEl.disabled = !enabled;
+  selectedNodeToggleCollapseEl.disabled = !enabled;
   selectedNodeXEl.disabled = !enabled;
   selectedNodeYEl.disabled = !enabled;
 }
@@ -347,6 +426,22 @@ function getNodeScreenshotUrl(node) {
   }
 
   return node.metadata.screenshotUrl ?? "";
+}
+
+function isNoteNodeCollapsed(node) {
+  if (!node || !node.metadata) {
+    return false;
+  }
+
+  return node.metadata.noteCollapsed === "true";
+}
+
+function setNoteNodeCollapsed(node, collapsed) {
+  if (!node.metadata) {
+    node.metadata = {};
+  }
+
+  node.metadata.noteCollapsed = collapsed ? "true" : "false";
 }
 
 function getNodeSize(node) {
@@ -414,6 +509,49 @@ function wrapTextLines(text, maxCharsPerLine) {
 }
 
 function getNodeRenderData(node) {
+  if (node.type === "note") {
+    const collapsed = isNoteNodeCollapsed(node);
+    const lineHeight = 16;
+    const titleLines = wrapTextLines(node.title, 30);
+    const titleTopOffset = 36;
+
+    if (collapsed) {
+      const titleHeight = Math.max(lineHeight, titleLines.length * lineHeight);
+      const height = Math.max(nodeSize.h, titleTopOffset + titleHeight + 8);
+
+      return {
+        width: nodeSize.w,
+        height,
+        lineHeight,
+        titleLines,
+        titleTopOffset,
+        isNoteNode: true,
+        isCollapsed: true,
+        noteLines: []
+      };
+    }
+
+    const noteFrameTop = titleTopOffset + Math.max(lineHeight, titleLines.length * lineHeight) + 8;
+    const noteFrameHeight = 250;
+    const noteFrameWidth = noteNodeSize.w - 16;
+    const noteText = String(node.notes ?? "").slice(0, 5000);
+    const noteLines = wrapTextLines(noteText, 40);
+
+    return {
+      width: noteNodeSize.w,
+      height: noteNodeSize.h,
+      lineHeight,
+      titleLines,
+      titleTopOffset,
+      isNoteNode: true,
+      isCollapsed: false,
+      noteFrameTop,
+      noteFrameHeight,
+      noteFrameWidth,
+      noteLines
+    };
+  }
+
   const screenshotUrl = getNodeScreenshotUrl(node);
   const hasScreenshot = Boolean(screenshotUrl);
   const orientation = hasScreenshot ? getScreenshotOrientation(screenshotUrl) : "landscape";
@@ -435,7 +573,8 @@ function getNodeRenderData(node) {
       screenshotUrl,
       lineHeight,
       titleLines,
-      titleTopOffset
+        titleTopOffset,
+        isNoteNode: false
     };
   }
 
@@ -452,6 +591,7 @@ function getNodeRenderData(node) {
     lineHeight,
     titleLines,
     titleTopOffset,
+    isNoteNode: false,
     orientation,
     frameTopOffset,
     frameHeight
@@ -487,9 +627,38 @@ function syncSelectedNodePositionFields() {
 
 function renderSelectedNodeEditor() {
   const node = getSelectedNode();
+  const link = getSelectedLink();
+
+  const hasSelection = Boolean(node || link);
+
+  if (entityTypeGroupEl) {
+    entityTypeGroupEl.classList.toggle("hidden", !node);
+  }
+
+  if (linkTypeGroupEl) {
+    linkTypeGroupEl.classList.toggle("hidden", Boolean(node || link));
+  }
+
+  if (nodeEditorGroupEl) {
+    nodeEditorGroupEl.classList.toggle("hidden", !node);
+  }
+
+  if (linkEditorGroupEl) {
+    linkEditorGroupEl.classList.toggle("hidden", !link);
+  }
 
   if (nodeInspectorEl) {
-    nodeInspectorEl.classList.toggle("open", Boolean(node));
+    nodeInspectorEl.classList.toggle("open", hasSelection);
+  }
+
+  if (link) {
+    const from = state.board.entities.find(entity => entity.id === link.fromId);
+    const to = state.board.entities.find(entity => entity.id === link.toId);
+    const fromTitle = from?.title ?? link.fromId;
+    const toTitle = to?.title ?? link.toId;
+    selectedLinkMetaEl.textContent = `${fromTitle} -> ${toTitle} | created: ${formatTimestamp(link.createdAt)}`;
+    selectedLinkTypeEl.value = link.type;
+    return;
   }
 
   if (!node) {
@@ -499,26 +668,55 @@ function renderSelectedNodeEditor() {
     selectedNodeNotesEl.value = "";
     selectedNodeScreenshotEl.src = "";
     selectedNodeScreenshotEl.classList.add("hidden");
+    selectedNodeScreenshotHintEl.classList.remove("hidden");
     selectedNodeScreenshotHintEl.textContent = "Drag and drop an image onto a node to attach a screenshot.";
+    selectedNodeRemoveScreenshotEl.textContent = "Add Image";
+    selectedNodeRemoveScreenshotEl.classList.remove("hidden");
+    selectedNodeToggleCollapseEl.classList.add("hidden");
+    selectedNodeNotesEl.classList.remove("note-body-editor");
+    selectedNodeNotesEl.maxLength = 5000;
+    selectedNodeNotesEl.placeholder = "Node notes";
     selectedNodeXEl.value = "";
     selectedNodeYEl.value = "";
+    selectedLinkMetaEl.textContent = "No link selected";
     setNodeEditorEnabled(false);
     return;
   }
 
-  selectedNodeMetaEl.textContent = `ID: ${node.id}`;
+  selectedNodeMetaEl.textContent = `ID: ${node.id} | created: ${formatTimestamp(node.createdAt)}`;
   selectedNodeTypeEl.value = node.type;
   selectedNodeTitleEl.value = node.title;
-  selectedNodeNotesEl.value = node.notes ?? "";
+  selectedNodeNotesEl.value = String(node.notes ?? "").slice(0, 5000);
+
+  const isNoteNode = node.type === "note";
+  selectedNodeNotesEl.classList.toggle("note-body-editor", isNoteNode);
+  selectedNodeNotesEl.maxLength = 5000;
+  selectedNodeNotesEl.placeholder = isNoteNode ? "Note body (max 5000 characters)" : "Node notes";
+
+  if (isNoteNode) {
+    selectedNodeScreenshotHintEl.classList.add("hidden");
+    selectedNodeScreenshotEl.src = "";
+    selectedNodeScreenshotEl.classList.add("hidden");
+    selectedNodeRemoveScreenshotEl.classList.add("hidden");
+    selectedNodeToggleCollapseEl.classList.remove("hidden");
+    selectedNodeToggleCollapseEl.textContent = isNoteNodeCollapsed(node) ? "Expand Note" : "Collapse Note";
+  } else {
+    selectedNodeScreenshotHintEl.classList.remove("hidden");
+    selectedNodeRemoveScreenshotEl.classList.remove("hidden");
+    selectedNodeToggleCollapseEl.classList.add("hidden");
+  }
+
   const screenshotUrl = getNodeScreenshotUrl(node);
-  if (screenshotUrl) {
+  if (!isNoteNode && screenshotUrl) {
     selectedNodeScreenshotEl.src = screenshotUrl;
     selectedNodeScreenshotEl.classList.remove("hidden");
     selectedNodeScreenshotHintEl.textContent = "Screenshot attached. Drop another image on this node to replace it.";
-  } else {
+    selectedNodeRemoveScreenshotEl.textContent = "Remove Image";
+  } else if (!isNoteNode) {
     selectedNodeScreenshotEl.src = "";
     selectedNodeScreenshotEl.classList.add("hidden");
     selectedNodeScreenshotHintEl.textContent = "Drag and drop an image onto this node to attach a screenshot.";
+    selectedNodeRemoveScreenshotEl.textContent = "Add Image";
   }
   selectedNodeXEl.value = String(node.x);
   selectedNodeYEl.value = String(node.y);
@@ -599,6 +797,13 @@ function draw() {
     ctx.fillRect(mx - 42, my - 12, 84, 18);
     ctx.strokeStyle = "rgba(124, 159, 235, 0.5)";
     ctx.strokeRect(mx - 42, my - 12, 84, 18);
+
+    if (link.id === state.selectedLinkId) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(mx - 44, my - 14, 88, 22);
+    }
+
     ctx.fillStyle = "#d9e8ff";
     ctx.font = "12px Trebuchet MS";
     ctx.textAlign = "center";
@@ -646,6 +851,39 @@ function draw() {
 
     ctx.fillStyle = "#9cb0d9";
     ctx.font = "12px Trebuchet MS";
+    if (render.isNoteNode && !render.isCollapsed) {
+      const frameX = entity.x + 8;
+      const frameY = entity.y + render.noteFrameTop;
+      const frameW = render.noteFrameWidth;
+      const frameH = render.noteFrameHeight;
+
+      const noteChars = String(entity.notes ?? "").slice(0, 5000).length;
+      ctx.fillStyle = "#9cb0d9";
+      ctx.fillText(`note body ${noteChars}/5000`, entity.x + 8, frameY - 8);
+
+      ctx.fillStyle = "#0b1733";
+      ctx.fillRect(frameX, frameY, frameW, frameH);
+      ctx.strokeStyle = "#4a69a8";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(frameX, frameY, frameW, frameH);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(frameX + 6, frameY + 6, frameW - 12, frameH - 12);
+      ctx.clip();
+
+      ctx.fillStyle = "#d7e6ff";
+      ctx.font = "13px Trebuchet MS";
+      const maxVisibleLines = Math.floor((frameH - 16) / render.lineHeight);
+      const visibleLines = render.noteLines.slice(0, maxVisibleLines);
+
+      for (let i = 0; i < visibleLines.length; i += 1) {
+        ctx.fillText(visibleLines[i], frameX + 8, frameY + 18 + i * render.lineHeight);
+      }
+
+      ctx.restore();
+    }
+
     if (render.hasScreenshot) {
       const image = getScreenshotImage(render.screenshotUrl);
       const frameX = entity.x + 8;
@@ -754,11 +992,15 @@ function findLinkTagAtScreen(x, y) {
   return null;
 }
 
-function findScreenshotAtScreen(x, y) {
+function findScreenshotAtScreen(x, y, nodeId = null) {
   const world = screenToWorld(x, y);
 
   for (let i = state.screenshotHitRects.length - 1; i >= 0; i -= 1) {
     const hit = state.screenshotHitRects[i];
+
+    if (nodeId && hit.nodeId !== nodeId) {
+      continue;
+    }
 
     if (
       world.x >= hit.x &&
@@ -783,10 +1025,19 @@ function queueSave() {
 
 async function saveBoard() {
   try {
+    const payloadToSave = {
+      ...state.board,
+      camera: {
+        x: state.camera.x,
+        y: state.camera.y,
+        zoom: state.camera.zoom
+      }
+    };
+
     const response = await fetch(`/api/boards/${MASTER_BOARD_ID}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state.board)
+      body: JSON.stringify(payloadToSave)
     });
 
     if (!response.ok) {
@@ -795,6 +1046,7 @@ async function saveBoard() {
 
     const payload = await response.json();
     state.board = payload;
+    state.camera = normalizeCameraInput(payload.camera, state.camera);
     renderSelectedNodeEditor();
     setStatus("Saved");
   } catch (error) {
@@ -812,6 +1064,7 @@ async function loadBoard() {
 
     const payload = await response.json();
     state.board = payload;
+    state.camera = normalizeCameraInput(payload.camera, state.camera);
     state.selectedNodeId = null;
     renderSelectedNodeEditor();
     setStatus("Loaded master board");
@@ -847,6 +1100,11 @@ async function addImageToNodeByPicker(nodeId) {
 
   if (!node) {
     setStatus("Node not found");
+    return;
+  }
+
+  if (node.type === "note") {
+    setStatus("Notes nodes do not support images");
     return;
   }
 
@@ -895,6 +1153,7 @@ function addEntityAt(worldX, worldY, typeOverride = null) {
     type,
     title: `${type} node`,
     notes: "",
+    createdAt: new Date().toISOString(),
     x: Math.round(worldX - baseSize.w / 2),
     y: Math.round(worldY - baseSize.h / 2),
     metadata: {}
@@ -918,6 +1177,13 @@ function deleteEntity(entityId) {
   }
 
   state.board.links = state.board.links.filter(link => link.fromId !== entityId && link.toId !== entityId);
+
+  if (state.selectedLinkId) {
+    const stillExists = state.board.links.some(link => link.id === state.selectedLinkId);
+    if (!stillExists) {
+      state.selectedLinkId = null;
+    }
+  }
 
   if (state.selectedNodeId === entityId) {
     state.selectedNodeId = null;
@@ -964,6 +1230,7 @@ function startConnectFromEntity(entityId) {
 function resetCamera() {
   state.camera = { x: 0, y: 0, zoom: 1 };
   draw();
+  queueSave();
   setStatus("View reset");
 }
 
@@ -974,14 +1241,19 @@ function buildBoardMenu() {
     <button data-action="add-evidence">Add Evidence Here</button>
     <button data-action="add-event">Add Event Here</button>
     <button data-action="add-concept">Add Concept Here</button>
+    <button data-action="add-note">Add Note Here</button>
     <button data-action="reset-view">Reset View</button>
   `;
 }
 
 function buildNodeMenu(entity) {
+  const imageButton = entity.type === "note"
+    ? ""
+    : "<button data-action=\"node-add-image\">Add Image</button>";
+
   return `
     <p class="context-menu-header">Object: ${entity.title}</p>
-    <button data-action="node-add-image">Add Image</button>
+    ${imageButton}
     <button data-action="rename-node">Rename Node</button>
     <button data-action="connect-from-node">Start Connection From Here</button>
     <button data-action="delete-node" class="menu-danger">Delete Node</button>
@@ -1000,6 +1272,7 @@ function buildLinkMenu(link) {
     <button data-action="link-add-evidence">Create Evidence From Link</button>
     <button data-action="link-add-event">Create Event From Link</button>
     <button data-action="link-add-concept">Create Concept From Link</button>
+    <button data-action="link-add-note">Create Note From Link</button>
   `;
 }
 
@@ -1010,6 +1283,7 @@ function buildConnectTargetMenu(sourceTitle) {
     <button data-action="connect-add-evidence">Create + Link Evidence</button>
     <button data-action="connect-add-event">Create + Link Event</button>
     <button data-action="connect-add-concept">Create + Link Concept</button>
+    <button data-action="connect-add-note">Create + Link Note</button>
     <button data-action="cancel-connect" class="menu-danger">Cancel Connect</button>
   `;
 }
@@ -1100,6 +1374,10 @@ function breakSelectedLink() {
   }
 
   state.contextMenu.linkId = null;
+  if (state.selectedLinkId === linkId) {
+    state.selectedLinkId = null;
+  }
+  renderSelectedNodeEditor();
   draw();
   queueSave();
   setStatus("Link broken");
@@ -1128,6 +1406,9 @@ contextMenuEl.addEventListener("click", event => {
   if (action === "add-concept") {
     addEntityAt(x, y, "concept");
   }
+  if (action === "add-note") {
+    addEntityAt(x, y, "note");
+  }
   if (action === "reset-view") {
     resetCamera();
   }
@@ -1155,6 +1436,9 @@ contextMenuEl.addEventListener("click", event => {
   if (action === "connect-add-concept") {
     createLinkedNodeAt("concept");
   }
+  if (action === "connect-add-note") {
+    createLinkedNodeAt("note");
+  }
   if (action === "cancel-connect") {
     disableConnectMode();
   }
@@ -1169,6 +1453,9 @@ contextMenuEl.addEventListener("click", event => {
   }
   if (action === "link-add-concept") {
     createNodeFromLink("concept");
+  }
+  if (action === "link-add-note") {
+    createNodeFromLink("note");
   }
   if (action === "link-type-fact") {
     updateSelectedLinkType("fact");
@@ -1210,7 +1497,8 @@ function createLink(fromEntity, toEntity) {
     fromId: fromEntity.id,
     toId: toEntity.id,
     type,
-    label: type
+    label: type,
+    createdAt: new Date().toISOString()
   });
 
   setStatus(`Link created: ${type}`);
@@ -1240,15 +1528,17 @@ canvas.addEventListener("pointerdown", event => {
     return;
   }
 
-  const screenshotHit = findScreenshotAtScreen(event.offsetX, event.offsetY);
-
-  if (screenshotHit) {
-    setSelectedNode(screenshotHit.nodeId);
-    openImageViewer(screenshotHit.url);
-    return;
-  }
-
   const hit = findEntityAtScreen(event.offsetX, event.offsetY);
+
+  if (hit) {
+    const screenshotHit = findScreenshotAtScreen(event.offsetX, event.offsetY, hit.id);
+
+    if (screenshotHit) {
+      setSelectedNode(screenshotHit.nodeId);
+      openImageViewer(screenshotHit.url);
+      return;
+    }
+  }
 
   if (state.connectMode && hit) {
     if (!state.connectFrom) {
@@ -1297,6 +1587,16 @@ canvas.addEventListener("pointerdown", event => {
     canvas.setPointerCapture(event.pointerId);
     updateCanvasCursor();
     return;
+  }
+
+  const linkTagHit = findLinkTagAtScreen(event.offsetX, event.offsetY);
+  if (linkTagHit) {
+    const link = state.board.links.find(item => item.id === linkTagHit.linkId);
+    if (link) {
+      setSelectedLink(link.id);
+      setStatus(`Selected link: ${link.type}`);
+      return;
+    }
   }
 
   if (event.altKey) {
@@ -1348,6 +1648,7 @@ canvas.addEventListener("pointermove", event => {
     state.camera.x = state.cameraStart.x + (event.offsetX - state.pointerStart.x);
     state.camera.y = state.cameraStart.y + (event.offsetY - state.pointerStart.y);
     draw();
+    queueSave();
   }
 });
 
@@ -1440,6 +1741,7 @@ canvas.addEventListener("contextmenu", event => {
     const link = state.board.links.find(item => item.id === linkTagHit.linkId);
 
     if (link) {
+      setSelectedLink(link.id);
       state.contextMenu.nodeId = null;
       state.contextMenu.linkId = link.id;
       state.contextMenu.connectFromId = null;
@@ -1480,6 +1782,7 @@ canvas.addEventListener("wheel", event => {
   state.camera.y += (mouseWorldAfter.y - mouseWorldBefore.y) * state.camera.zoom;
 
   draw();
+  queueSave();
 }, { passive: false });
 
 canvas.addEventListener("dragover", event => {
@@ -1508,6 +1811,11 @@ canvas.addEventListener("drop", async event => {
     return;
   }
 
+  if (node.type === "note") {
+    setStatus("Notes nodes do not support images");
+    return;
+  }
+
   try {
     setStatus("Uploading screenshot...");
     const url = await uploadScreenshot(imageFile);
@@ -1527,6 +1835,10 @@ canvas.addEventListener("drop", async event => {
 });
 
 selectedNodeTypeEl.addEventListener("change", () => {
+  if (state.selectedLinkId) {
+    return;
+  }
+
   const node = getSelectedNode();
 
   if (!node) {
@@ -1534,6 +1846,15 @@ selectedNodeTypeEl.addEventListener("change", () => {
   }
 
   node.type = selectedNodeTypeEl.value;
+
+  if (node.type === "note") {
+    setNoteNodeCollapsed(node, false);
+    if (node.metadata) {
+      delete node.metadata.screenshotUrl;
+    }
+  }
+
+  renderSelectedNodeEditor();
   draw();
   queueSave();
 });
@@ -1557,7 +1878,12 @@ selectedNodeNotesEl.addEventListener("input", () => {
     return;
   }
 
+  if (selectedNodeNotesEl.value.length > 5000) {
+    selectedNodeNotesEl.value = selectedNodeNotesEl.value.slice(0, 5000);
+  }
+
   node.notes = selectedNodeNotesEl.value;
+  draw();
   queueSave();
 });
 
@@ -1568,8 +1894,17 @@ selectedNodeRemoveScreenshotEl.addEventListener("click", () => {
     return;
   }
 
+  if (node.type === "note") {
+    return;
+  }
+
   if (!node.metadata) {
     node.metadata = {};
+  }
+
+  if (!node.metadata.screenshotUrl) {
+    addImageToNodeByPicker(node.id);
+    return;
   }
 
   delete node.metadata.screenshotUrl;
@@ -1577,6 +1912,21 @@ selectedNodeRemoveScreenshotEl.addEventListener("click", () => {
   draw();
   queueSave();
   setStatus("Screenshot removed");
+});
+
+selectedNodeToggleCollapseEl.addEventListener("click", () => {
+  const node = getSelectedNode();
+
+  if (!node || node.type !== "note") {
+    return;
+  }
+
+  const next = !isNoteNodeCollapsed(node);
+  setNoteNodeCollapsed(node, next);
+  renderSelectedNodeEditor();
+  draw();
+  queueSave();
+  setStatus(next ? "Note collapsed" : "Note expanded");
 });
 
 selectedNodeXEl.addEventListener("change", () => {
@@ -1615,6 +1965,41 @@ selectedNodeYEl.addEventListener("change", () => {
   node.y = Math.round(nextY);
   draw();
   queueSave();
+});
+
+selectedLinkTypeEl.addEventListener("change", () => {
+  const link = getSelectedLink();
+
+  if (!link) {
+    return;
+  }
+
+  link.type = selectedLinkTypeEl.value;
+  link.label = selectedLinkTypeEl.value;
+  draw();
+  queueSave();
+  setStatus(`Link type changed to ${link.type}`);
+});
+
+selectedLinkBreakEl.addEventListener("click", () => {
+  const link = getSelectedLink();
+
+  if (!link) {
+    return;
+  }
+
+  const before = state.board.links.length;
+  state.board.links = state.board.links.filter(item => item.id !== link.id);
+
+  if (state.board.links.length === before) {
+    return;
+  }
+
+  state.selectedLinkId = null;
+  renderSelectedNodeEditor();
+  draw();
+  queueSave();
+  setStatus("Link broken");
 });
 
 window.addEventListener("resize", resizeCanvas);

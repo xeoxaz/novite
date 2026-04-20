@@ -7,7 +7,14 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="overlay-brand" aria-label="Project name">Novite</div>
+  <a
+    class="overlay-brand overlay-brand-link"
+    href="https://github.com/xeoxaz/novite"
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="Novite project GitHub repository"
+  >Novite</a>
+  <p id="globalStatus" class="overlay-status" aria-live="polite">Ready</p>
   <div class="overlay-credit">
     Created by: Xeoxaz
     <a href="https://github.com/xeoxaz" target="_blank" rel="noopener noreferrer">github.com/xeoxaz</a>
@@ -22,17 +29,18 @@
     <h1>Node Inspector</h1>
     <p class="muted">Select a node to view and edit details.</p>
 
-    <div class="group">
+    <div class="group" id="entityTypeGroup">
       <label>Entity Type</label>
       <select id="entityType">
         <option value="person">Person</option>
         <option value="evidence">Evidence</option>
         <option value="event">Event</option>
         <option value="concept">Concept</option>
+        <option value="note">Note</option>
       </select>
     </div>
 
-    <div class="group">
+    <div class="group" id="linkTypeGroup">
       <label>Link Type</label>
       <select id="linkType">
         <option value="fact">Fact</option>
@@ -52,6 +60,7 @@
         <option value="evidence">Evidence</option>
         <option value="event">Event</option>
         <option value="concept">Concept</option>
+        <option value="note">Note</option>
       </select>
 
       <label for="selectedNodeTitle">Title</label>
@@ -59,6 +68,7 @@
 
       <label for="selectedNodeNotes">Notes</label>
       <textarea id="selectedNodeNotes" rows="3" placeholder="Node notes"></textarea>
+      <button id="selectedNodeToggleCollapse" type="button" class="hidden">Collapse Note</button>
 
       <p id="selectedNodeScreenshotHint" class="muted small">Drag and drop an image onto a node to attach a screenshot.</p>
       <img id="selectedNodeScreenshot" class="node-screenshot hidden" alt="Node screenshot" />
@@ -74,6 +84,21 @@
           <input id="selectedNodeY" type="number" />
         </div>
       </div>
+    </div>
+
+    <div class="group hidden" id="linkEditorGroup">
+      <p class="editor-title">Selected Link</p>
+      <p id="selectedLinkMeta" class="muted small">No link selected</p>
+
+      <label for="selectedLinkType">Type</label>
+      <select id="selectedLinkType">
+        <option value="fact">Fact</option>
+        <option value="theory">Theory</option>
+        <option value="contradiction">Contradiction</option>
+        <option value="weak">Weak Link</option>
+      </select>
+
+      <button id="selectedLinkBreak" type="button" class="menu-danger">Break Link</button>
     </div>
 
     <div class="group">

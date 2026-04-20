@@ -4,7 +4,7 @@ import { ObjectId } from "mongodb";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-type EntityType = "person" | "evidence" | "event" | "concept";
+type EntityType = "person" | "evidence" | "event" | "concept" | "note";
 type LinkType = "fact" | "theory" | "contradiction" | "weak";
 
 type Entity = {
@@ -12,6 +12,7 @@ type Entity = {
     type: EntityType;
     title: string;
     notes: string;
+    createdAt: string;
     x: number;
     y: number;
     metadata: Record<string, string>;
@@ -23,12 +24,20 @@ type Link = {
     toId: string;
     type: LinkType;
     label: string;
+    createdAt: string;
+};
+
+type CameraState = {
+    x: number;
+    y: number;
+    zoom: number;
 };
 
 type Board = {
     _id: string;
     entities: Entity[];
     links: Link[];
+    camera: CameraState;
     createdAt: Date;
     updatedAt: Date;
 };
@@ -53,8 +62,26 @@ function defaultBoard(boardId: string): Board {
         _id: boardId,
         entities: [],
         links: [],
+        camera: { x: 0, y: 0, zoom: 1 },
         createdAt: now,
         updatedAt: now
+    };
+}
+
+function normalizeCameraInput(input: unknown, fallback: CameraState): CameraState {
+    if (!input || typeof input !== "object") {
+        return fallback;
+    }
+
+    const candidate = input as Partial<CameraState>;
+    const x = Number(candidate.x);
+    const y = Number(candidate.y);
+    const zoom = Number(candidate.zoom);
+
+    return {
+        x: Number.isFinite(x) ? x : fallback.x,
+        y: Number.isFinite(y) ? y : fallback.y,
+        zoom: Number.isFinite(zoom) ? Math.max(0.2, Math.min(2.4, zoom)) : fallback.zoom
     };
 }
 
@@ -81,10 +108,13 @@ async function getOrCreateBoard(boardId: string): Promise<Board> {
 }
 
 function normalizeBoardInput(input: Partial<Board>, current: Board): Board {
+    const fallbackCamera = normalizeCameraInput((current as Partial<Board>).camera, { x: 0, y: 0, zoom: 1 });
+
     return {
         _id: current._id,
         entities: Array.isArray(input.entities) ? input.entities : current.entities,
         links: Array.isArray(input.links) ? input.links : current.links,
+        camera: normalizeCameraInput(input.camera, fallbackCamera),
         createdAt: current.createdAt,
         updatedAt: new Date()
     };
