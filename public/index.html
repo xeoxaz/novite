@@ -7,17 +7,26 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <a
-    class="overlay-brand overlay-brand-link"
-    href="https://github.com/xeoxaz/novite"
-    target="_blank"
-    rel="noopener noreferrer"
-    aria-label="Novite project GitHub repository"
-  >Novite</a>
-  <p id="globalStatus" class="overlay-status" aria-live="polite">Ready</p>
-  <div class="overlay-credit">
-    Created by: Xeoxaz
-    <a href="https://github.com/xeoxaz" target="_blank" rel="noopener noreferrer">github.com/xeoxaz</a>
+  <div class="overlay-panel">
+    <div class="overlay-panel-row overlay-panel-top">
+      <a
+        class="overlay-brand overlay-brand-link"
+        href="https://github.com/xeoxaz/novite"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Novite project GitHub repository"
+      >Novite</a>
+
+      <div class="overlay-theme-switcher">
+        <label for="themeSelect">Theme</label>
+        <select id="themeSelect" aria-label="Theme selector">
+          <option value="blue">Blue</option>
+          <option value="gray">Gray</option>
+        </select>
+      </div>
+    </div>
+
+    <p id="globalStatus" class="overlay-status" aria-live="polite">Ready</p>
   </div>
 
   <main class="canvas-wrap">
@@ -104,6 +113,11 @@
     <div class="group">
       <p id="statusLine" class="status">Ready</p>
       <p class="muted small">Controls: drag node to move, drag background to pan, wheel to zoom, double-click node to rename, right-click board/node for context menu.</p>
+    </div>
+
+    <div class="group inspector-credit">
+      <p class="muted small">Created by: Xeoxaz</p>
+      <a href="https://github.com/xeoxaz" target="_blank" rel="noopener noreferrer">github.com/xeoxaz</a>
     </div>
   </aside>
 

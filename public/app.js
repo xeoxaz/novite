@@ -5,6 +5,7 @@ const entityTypeEl = document.getElementById("entityType");
 const linkTypeEl = document.getElementById("linkType");
 const statusLineEl = document.getElementById("statusLine");
 const globalStatusEl = document.getElementById("globalStatus");
+const themeSelectEl = document.getElementById("themeSelect");
 const contextMenuEl = document.getElementById("contextMenu");
 const imageViewerModalEl = document.getElementById("imageViewerModal");
 const imageViewerImageEl = document.getElementById("imageViewerImage");
@@ -42,17 +43,66 @@ const ZOOM_ANIMATION_MS = 130;
 const PAN_GLIDE_FRICTION_PER_FRAME = 0.9;
 const PAN_GLIDE_MIN_SPEED = 0.025;
 const PAN_GLIDE_MAX_SPEED = 1.8;
-
-const colors = {
-  person: "#66b2ff",
-  evidence: "#c58cff",
-  event: "#ffc97b",
-  concept: "#79e0a7",
-  note: "#ffe08a",
-  fact: "#6fe78f",
-  theory: "#79a7ff",
-  contradiction: "#ff7b9d",
-  weak: "#b2c1df"
+const RIGHT_CLICK_HOLD_PAN_MS = 180;
+const NODE_SHADOW_COLOR = "rgba(0, 0, 0, 0.4)";
+const NODE_SHADOW_BLUR = 16;
+const NODE_SHADOW_OFFSET_Y = 7;
+const THEME_STORAGE_KEY = "novite-theme";
+const DEFAULT_THEME = "blue";
+const THEMES = new Set(["blue", "gray"]);
+const CANVAS_THEMES = {
+  blue: {
+    typeColors: {
+      person: "#66b2ff",
+      evidence: "#c58cff",
+      event: "#ffc97b",
+      concept: "#79e0a7",
+      note: "#ffe08a",
+      fact: "#6fe78f",
+      theory: "#79a7ff",
+      contradiction: "#ff7b9d",
+      weak: "#b2c1df"
+    },
+    gridStroke: "rgba(116, 156, 255, 0.18)",
+    linkTagFill: "#102246",
+    linkTagBorder: "rgba(124, 159, 235, 0.5)",
+    linkTagText: "#d9e8ff",
+    nodeFill: "#12254a",
+    nodeTitleText: "#eef4ff",
+    frameLabelText: "#9cb0d9",
+    frameFill: "#0b1733",
+    frameBorder: "#4a69a8",
+    noteBodyText: "#d7e6ff",
+    selectionOutline: "#ffffff",
+    selectionBoxFill: "rgba(93, 138, 226, 0.2)",
+    selectionBoxStroke: "rgba(154, 194, 255, 0.95)"
+  },
+  gray: {
+    typeColors: {
+      person: "#bcc7d5",
+      evidence: "#d2c6d9",
+      event: "#d9d0bc",
+      concept: "#c0d7cc",
+      note: "#ddd8c7",
+      fact: "#c2d2c8",
+      theory: "#c4ccda",
+      contradiction: "#d9c0c7",
+      weak: "#b9c0c9"
+    },
+    gridStroke: "rgba(210, 216, 224, 0.16)",
+    linkTagFill: "#3a3f46",
+    linkTagBorder: "rgba(176, 184, 194, 0.45)",
+    linkTagText: "#eef1f5",
+    nodeFill: "#41464e",
+    nodeTitleText: "#f0f2f6",
+    frameLabelText: "#ced4dc",
+    frameFill: "#2f343b",
+    frameBorder: "#777f8a",
+    noteBodyText: "#eceff3",
+    selectionOutline: "#f7f9fc",
+    selectionBoxFill: "rgba(208, 215, 224, 0.2)",
+    selectionBoxStroke: "rgba(235, 240, 246, 0.9)"
+  }
 };
 
 let state = {
@@ -93,6 +143,15 @@ let state = {
     velocityX: 0,
     velocityY: 0
   },
+  rightClick: {
+    isDown: false,
+    pointerId: null,
+    holdTimer: null,
+    holdPanActive: false,
+    suppressMenuOnce: false,
+    startX: 0,
+    startY: 0
+  },
   connectMode: false,
   connectFrom: null,
   saveTimer: null,
@@ -132,6 +191,46 @@ function setStatus(text) {
     const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     globalStatusEl.textContent = `${time} - ${text}`;
   }
+}
+
+function getActiveThemeName() {
+  const theme = document.body.getAttribute("data-theme");
+  return THEMES.has(theme) ? theme : DEFAULT_THEME;
+}
+
+function getCanvasTheme() {
+  const activeTheme = getActiveThemeName();
+  return CANVAS_THEMES[activeTheme] ?? CANVAS_THEMES[DEFAULT_THEME];
+}
+
+function applyTheme(theme) {
+  const nextTheme = THEMES.has(theme) ? theme : DEFAULT_THEME;
+
+  document.body.setAttribute("data-theme", nextTheme);
+
+  if (themeSelectEl && themeSelectEl.value !== nextTheme) {
+    themeSelectEl.value = nextTheme;
+  }
+
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  } catch {
+    // Ignore storage errors (private mode / blocked storage).
+  }
+
+  draw();
+}
+
+function initializeTheme() {
+  let savedTheme = DEFAULT_THEME;
+
+  try {
+    savedTheme = localStorage.getItem(THEME_STORAGE_KEY) ?? DEFAULT_THEME;
+  } catch {
+    savedTheme = DEFAULT_THEME;
+  }
+
+  applyTheme(savedTheme);
 }
 
 function updateCanvasCursor() {
@@ -263,6 +362,13 @@ function stopPanGlide() {
   state.panGlide.rafId = null;
   state.panGlide.velocityX = 0;
   state.panGlide.velocityY = 0;
+}
+
+function clearRightClickHoldTimer() {
+  if (state.rightClick.holdTimer !== null) {
+    clearTimeout(state.rightClick.holdTimer);
+    state.rightClick.holdTimer = null;
+  }
 }
 
 function startPanGlide(initialVelocityX, initialVelocityY) {
@@ -873,12 +979,13 @@ function renderSelectedNodeEditor() {
 }
 
 function drawGrid() {
+  const canvasTheme = getCanvasTheme();
   const step = 70 * state.camera.zoom;
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
 
   ctx.save();
-  ctx.strokeStyle = "rgba(116, 156, 255, 0.18)";
+  ctx.strokeStyle = canvasTheme.gridStroke;
   ctx.lineWidth = 1;
 
   const startX = ((state.camera.x % step) + step) % step;
@@ -994,6 +1101,7 @@ function getCurvedLinkPath(fx, fy, tx, ty, fromId, toId, entities) {
 }
 
 function draw() {
+  const canvasTheme = getCanvasTheme();
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   ctx.clearRect(0, 0, width, height);
@@ -1022,7 +1130,7 @@ function draw() {
     const tx = to.x + toSize.w / 2;
     const ty = to.y + toSize.h / 2;
 
-    ctx.strokeStyle = colors[link.type] || "#8ca0c5";
+    ctx.strokeStyle = canvasTheme.typeColors[link.type] || "#8ca0c5";
     ctx.lineWidth = link.type === "weak" ? 1.2 : 2;
     ctx.setLineDash(link.type === "theory" ? [8, 5] : link.type === "weak" ? [4, 4] : []);
     const curvePath = getCurvedLinkPath(fx, fy, tx, ty, from.id, to.id, state.board.entities);
@@ -1035,18 +1143,18 @@ function draw() {
     const my = curvePath.my;
 
     ctx.setLineDash([]);
-    ctx.fillStyle = "#102246";
+    ctx.fillStyle = canvasTheme.linkTagFill;
     ctx.fillRect(mx - 42, my - 12, 84, 18);
-    ctx.strokeStyle = "rgba(124, 159, 235, 0.5)";
+    ctx.strokeStyle = canvasTheme.linkTagBorder;
     ctx.strokeRect(mx - 42, my - 12, 84, 18);
 
     if (link.id === state.selectedLinkId) {
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = canvasTheme.selectionOutline;
       ctx.lineWidth = 1.5;
       ctx.strokeRect(mx - 44, my - 14, 88, 22);
     }
 
-    ctx.fillStyle = "#d9e8ff";
+    ctx.fillStyle = canvasTheme.linkTagText;
     ctx.font = "12px Trebuchet MS";
     ctx.textAlign = "center";
     ctx.fillText(link.type, mx, my + 1);
@@ -1065,16 +1173,24 @@ function draw() {
   for (const entity of state.board.entities) {
     const render = getNodeRenderData(entity);
     const size = { w: render.width, h: render.height };
-    const color = colors[entity.type] || "#8ca0c5";
+    const color = canvasTheme.typeColors[entity.type] || "#8ca0c5";
 
-    ctx.fillStyle = "#12254a";
+    ctx.fillStyle = canvasTheme.nodeFill;
+    ctx.shadowColor = NODE_SHADOW_COLOR;
+    ctx.shadowBlur = NODE_SHADOW_BLUR;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = NODE_SHADOW_OFFSET_Y;
+    ctx.fillRect(entity.x, entity.y, size.w, size.h);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.fillRect(entity.x, entity.y, size.w, size.h);
     ctx.strokeRect(entity.x, entity.y, size.w, size.h);
 
     if (isNodeSelected(entity.id)) {
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = canvasTheme.selectionOutline;
       ctx.lineWidth = entity.id === state.selectedNodeId ? 2.5 : 1.7;
       ctx.strokeRect(entity.x - 2, entity.y - 2, size.w + 4, size.h + 4);
     }
@@ -1084,14 +1200,14 @@ function draw() {
     ctx.textAlign = "left";
     ctx.fillText(entity.type.toUpperCase(), entity.x + 8, entity.y + 17);
 
-    ctx.fillStyle = "#eef4ff";
+    ctx.fillStyle = canvasTheme.nodeTitleText;
     ctx.font = "600 14px Trebuchet MS";
     for (let i = 0; i < render.titleLines.length; i += 1) {
       const lineY = entity.y + render.titleTopOffset + i * render.lineHeight;
       ctx.fillText(render.titleLines[i], entity.x + 8, lineY);
     }
 
-    ctx.fillStyle = "#9cb0d9";
+    ctx.fillStyle = canvasTheme.frameLabelText;
     ctx.font = "12px Trebuchet MS";
     if (render.isNoteNode && !render.isCollapsed) {
       const frameX = entity.x + 8;
@@ -1100,12 +1216,12 @@ function draw() {
       const frameH = render.noteFrameHeight;
 
       const noteChars = String(entity.notes ?? "").slice(0, 5000).length;
-      ctx.fillStyle = "#9cb0d9";
+      ctx.fillStyle = canvasTheme.frameLabelText;
       ctx.fillText(`note body ${noteChars}/5000`, entity.x + 8, frameY - 8);
 
-      ctx.fillStyle = "#0b1733";
+      ctx.fillStyle = canvasTheme.frameFill;
       ctx.fillRect(frameX, frameY, frameW, frameH);
-      ctx.strokeStyle = "#4a69a8";
+      ctx.strokeStyle = canvasTheme.frameBorder;
       ctx.lineWidth = 1;
       ctx.strokeRect(frameX, frameY, frameW, frameH);
 
@@ -1114,7 +1230,7 @@ function draw() {
       ctx.rect(frameX + 6, frameY + 6, frameW - 12, frameH - 12);
       ctx.clip();
 
-      ctx.fillStyle = "#d7e6ff";
+      ctx.fillStyle = canvasTheme.noteBodyText;
       ctx.font = "13px Trebuchet MS";
       const maxVisibleLines = Math.floor((frameH - 16) / render.lineHeight);
       const visibleLines = render.noteLines.slice(0, maxVisibleLines);
@@ -1142,7 +1258,7 @@ function draw() {
         h: frameH
       });
 
-      ctx.fillStyle = "#9cb0d9";
+      ctx.fillStyle = canvasTheme.frameLabelText;
       ctx.fillText("screenshot", entity.x + 8, frameY - 8);
 
       if (image && image.complete) {
@@ -1158,17 +1274,17 @@ function draw() {
         const drawX = frameX + (frameW - drawW) / 2;
         const drawY = frameY + (frameH - drawH) / 2;
 
-        ctx.fillStyle = "#0b1733";
+        ctx.fillStyle = canvasTheme.frameFill;
         ctx.fillRect(frameX, frameY, frameW, frameH);
         ctx.drawImage(image, drawX, drawY, drawW, drawH);
       } else {
-        ctx.fillStyle = "#0b1733";
+        ctx.fillStyle = canvasTheme.frameFill;
         ctx.fillRect(frameX, frameY, frameW, frameH);
-        ctx.fillStyle = "#9cb0d9";
+        ctx.fillStyle = canvasTheme.frameLabelText;
         ctx.fillText("loading image", frameX + 8, frameY + 18);
       }
 
-      ctx.strokeStyle = "#4a69a8";
+      ctx.strokeStyle = canvasTheme.frameBorder;
       ctx.lineWidth = 1;
       ctx.strokeRect(frameX, frameY, frameW, frameH);
     }
@@ -1185,8 +1301,8 @@ function draw() {
     const h = Math.abs(end.y - start.y);
 
     ctx.save();
-    ctx.fillStyle = "rgba(93, 138, 226, 0.2)";
-    ctx.strokeStyle = "rgba(154, 194, 255, 0.95)";
+    ctx.fillStyle = canvasTheme.selectionBoxFill;
+    ctx.strokeStyle = canvasTheme.selectionBoxStroke;
     ctx.lineWidth = 1.2;
     ctx.setLineDash([6, 4]);
     ctx.fillRect(x, y, w, h);
@@ -1786,6 +1902,34 @@ canvas.addEventListener("pointerdown", event => {
   hideContextMenu();
 
   if (event.button === 2) {
+    event.preventDefault();
+    state.rightClick.isDown = true;
+    state.rightClick.pointerId = event.pointerId;
+    state.rightClick.holdPanActive = false;
+    state.rightClick.startX = event.offsetX;
+    state.rightClick.startY = event.offsetY;
+    clearRightClickHoldTimer();
+
+    state.rightClick.holdTimer = setTimeout(() => {
+      if (!state.rightClick.isDown || state.rightClick.pointerId !== event.pointerId) {
+        return;
+      }
+
+      state.panning = true;
+      state.pointerStart = { x: state.rightClick.startX, y: state.rightClick.startY };
+      state.cameraStart = { x: state.camera.x, y: state.camera.y };
+      state.panTrack.lastX = state.rightClick.startX;
+      state.panTrack.lastY = state.rightClick.startY;
+      state.panTrack.lastTime = performance.now();
+      state.panTrack.velocityX = 0;
+      state.panTrack.velocityY = 0;
+      state.rightClick.holdPanActive = true;
+      state.rightClick.suppressMenuOnce = true;
+      updateCanvasCursor();
+      setStatus("Panning view");
+    }, RIGHT_CLICK_HOLD_PAN_MS);
+
+    canvas.setPointerCapture(event.pointerId);
     return;
   }
 
@@ -1950,6 +2094,13 @@ canvas.addEventListener("pointermove", event => {
 });
 
 canvas.addEventListener("pointerup", event => {
+  if (event.button === 2 && state.rightClick.pointerId === event.pointerId) {
+    clearRightClickHoldTimer();
+    state.rightClick.isDown = false;
+    state.rightClick.pointerId = null;
+    state.rightClick.holdPanActive = false;
+  }
+
   const shouldStartGlide = state.panning;
   const glideVelocityX = state.panTrack.velocityX;
   const glideVelocityY = state.panTrack.velocityY;
@@ -1996,6 +2147,15 @@ canvas.addEventListener("pointerup", event => {
   }
 });
 
+canvas.addEventListener("pointercancel", event => {
+  if (state.rightClick.pointerId === event.pointerId) {
+    clearRightClickHoldTimer();
+    state.rightClick.isDown = false;
+    state.rightClick.pointerId = null;
+    state.rightClick.holdPanActive = false;
+  }
+});
+
 canvas.addEventListener("auxclick", event => {
   if (event.button === 1) {
     event.preventDefault();
@@ -2020,6 +2180,12 @@ canvas.addEventListener("dblclick", event => {
 
 canvas.addEventListener("contextmenu", event => {
   event.preventDefault();
+
+  if (state.rightClick.suppressMenuOnce) {
+    state.rightClick.suppressMenuOnce = false;
+    return;
+  }
+
   const hit = findEntityAtScreen(event.offsetX, event.offsetY);
   const world = screenToWorld(event.offsetX, event.offsetY);
 
@@ -2310,6 +2476,12 @@ selectedLinkBreakEl.addEventListener("click", () => {
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("click", hideContextMenu);
 
+if (themeSelectEl) {
+  themeSelectEl.addEventListener("change", () => {
+    applyTheme(themeSelectEl.value);
+  });
+}
+
 imageViewerCloseEl.addEventListener("click", closeImageViewer);
 imageViewerModalEl.addEventListener("click", event => {
   if (event.target === imageViewerModalEl) {
@@ -2323,6 +2495,7 @@ window.addEventListener("keydown", event => {
 });
 
 resizeCanvas();
+initializeTheme();
 updateCanvasCursor();
 renderSelectedNodeEditor();
 loadBoard();
