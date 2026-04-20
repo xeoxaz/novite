@@ -36,6 +36,12 @@ const screenshotNodePortraitSize = { w: 220, h: 300 };
 const noteNodeSize = { w: 320, h: 310 };
 const SNAP_DISTANCE = 14;
 const SNAP_GAP = 5;
+const SAVE_DELAY_EDIT_MS = 700;
+const SAVE_DELAY_MOVEMENT_MS = 1800;
+const ZOOM_ANIMATION_MS = 130;
+const PAN_GLIDE_FRICTION_PER_FRAME = 0.9;
+const PAN_GLIDE_MIN_SPEED = 0.025;
+const PAN_GLIDE_MAX_SPEED = 1.8;
 
 const colors = {
   person: "#66b2ff",
@@ -80,9 +86,35 @@ let state = {
   selectedLinkId: null,
   pointerStart: { x: 0, y: 0 },
   cameraStart: { x: 0, y: 0 },
+  panTrack: {
+    lastX: 0,
+    lastY: 0,
+    lastTime: 0,
+    velocityX: 0,
+    velocityY: 0
+  },
   connectMode: false,
   connectFrom: null,
   saveTimer: null,
+  saveInFlight: false,
+  lastSavedFingerprint: "",
+  zoomAnimation: {
+    active: false,
+    rafId: null,
+    startTime: 0,
+    startZoom: 1,
+    startX: 0,
+    startY: 0,
+    targetZoom: 1,
+    targetX: 0,
+    targetY: 0
+  },
+  panGlide: {
+    active: false,
+    rafId: null,
+    velocityX: 0,
+    velocityY: 0
+  },
   contextMenu: {
     nodeId: null,
     linkId: null,
@@ -173,6 +205,7 @@ function closeImageViewer() {
 }
 
 function zoomToNode(node, zoomTarget = 1.5) {
+  stopZoomAnimation();
   const size = getNodeSize(node);
   const clampedZoom = Math.max(0.2, Math.min(2.4, zoomTarget));
   const nodeCenterX = node.x + size.w / 2;
@@ -182,7 +215,7 @@ function zoomToNode(node, zoomTarget = 1.5) {
   state.camera.x = canvas.clientWidth / 2 - nodeCenterX * clampedZoom;
   state.camera.y = canvas.clientHeight / 2 - nodeCenterY * clampedZoom;
   draw();
-  queueSave();
+  queueSave("movement");
 }
 
 function resizeCanvas() {
@@ -206,6 +239,122 @@ function worldToScreen(x, y) {
     x: x * state.camera.zoom + state.camera.x,
     y: y * state.camera.zoom + state.camera.y
   };
+}
+
+function easeOutCubic(t) {
+  return 1 - (1 - t) ** 3;
+}
+
+function stopZoomAnimation() {
+  if (state.zoomAnimation.rafId !== null) {
+    cancelAnimationFrame(state.zoomAnimation.rafId);
+  }
+
+  state.zoomAnimation.active = false;
+  state.zoomAnimation.rafId = null;
+}
+
+function stopPanGlide() {
+  if (state.panGlide.rafId !== null) {
+    cancelAnimationFrame(state.panGlide.rafId);
+  }
+
+  state.panGlide.active = false;
+  state.panGlide.rafId = null;
+  state.panGlide.velocityX = 0;
+  state.panGlide.velocityY = 0;
+}
+
+function startPanGlide(initialVelocityX, initialVelocityY) {
+  const vx = Math.max(-PAN_GLIDE_MAX_SPEED, Math.min(PAN_GLIDE_MAX_SPEED, initialVelocityX));
+  const vy = Math.max(-PAN_GLIDE_MAX_SPEED, Math.min(PAN_GLIDE_MAX_SPEED, initialVelocityY));
+  const speed = Math.hypot(vx, vy);
+
+  if (speed < PAN_GLIDE_MIN_SPEED) {
+    return;
+  }
+
+  stopPanGlide();
+  state.panGlide.active = true;
+  state.panGlide.velocityX = vx;
+  state.panGlide.velocityY = vy;
+
+  let lastTime = performance.now();
+
+  const tick = now => {
+    const dt = Math.min(34, Math.max(1, now - lastTime));
+    lastTime = now;
+
+    state.camera.x += state.panGlide.velocityX * dt;
+    state.camera.y += state.panGlide.velocityY * dt;
+
+    const friction = Math.pow(PAN_GLIDE_FRICTION_PER_FRAME, dt / 16.67);
+    state.panGlide.velocityX *= friction;
+    state.panGlide.velocityY *= friction;
+
+    draw();
+
+    if (Math.hypot(state.panGlide.velocityX, state.panGlide.velocityY) < PAN_GLIDE_MIN_SPEED) {
+      stopPanGlide();
+      queueSave("movement");
+      return;
+    }
+
+    state.panGlide.rafId = requestAnimationFrame(tick);
+  };
+
+  state.panGlide.rafId = requestAnimationFrame(tick);
+}
+
+function startZoomAnimation(targetZoom, targetX, targetY) {
+  stopZoomAnimation();
+
+  const fromZoom = state.camera.zoom;
+  const fromX = state.camera.x;
+  const fromY = state.camera.y;
+
+  if (
+    Math.abs(fromZoom - targetZoom) < 0.0001 &&
+    Math.abs(fromX - targetX) < 0.01 &&
+    Math.abs(fromY - targetY) < 0.01
+  ) {
+    state.camera.zoom = targetZoom;
+    state.camera.x = targetX;
+    state.camera.y = targetY;
+    draw();
+    queueSave("movement");
+    return;
+  }
+
+  state.zoomAnimation.active = true;
+  state.zoomAnimation.startTime = performance.now();
+  state.zoomAnimation.startZoom = fromZoom;
+  state.zoomAnimation.startX = fromX;
+  state.zoomAnimation.startY = fromY;
+  state.zoomAnimation.targetZoom = targetZoom;
+  state.zoomAnimation.targetX = targetX;
+  state.zoomAnimation.targetY = targetY;
+
+  const tick = now => {
+    const elapsed = now - state.zoomAnimation.startTime;
+    const t = Math.min(1, elapsed / ZOOM_ANIMATION_MS);
+    const eased = easeOutCubic(t);
+
+    state.camera.zoom = state.zoomAnimation.startZoom + (state.zoomAnimation.targetZoom - state.zoomAnimation.startZoom) * eased;
+    state.camera.x = state.zoomAnimation.startX + (state.zoomAnimation.targetX - state.zoomAnimation.startX) * eased;
+    state.camera.y = state.zoomAnimation.startY + (state.zoomAnimation.targetY - state.zoomAnimation.startY) * eased;
+    draw();
+
+    if (t >= 1) {
+      stopZoomAnimation();
+      queueSave("movement");
+      return;
+    }
+
+    state.zoomAnimation.rafId = requestAnimationFrame(tick);
+  };
+
+  state.zoomAnimation.rafId = requestAnimationFrame(tick);
 }
 
 function formatTimestamp(value) {
@@ -752,6 +901,98 @@ function drawGrid() {
   ctx.restore();
 }
 
+function getNodeRect(node, padding = 0) {
+  const size = getNodeSize(node);
+
+  return {
+    left: node.x - padding,
+    top: node.y - padding,
+    right: node.x + size.w + padding,
+    bottom: node.y + size.h + padding
+  };
+}
+
+function isPointInRect(x, y, rect) {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+function quadraticPointAt(t, p0, p1, p2) {
+  const oneMinusT = 1 - t;
+
+  return oneMinusT * oneMinusT * p0 + 2 * oneMinusT * t * p1 + t * t * p2;
+}
+
+function doesBezierHitRects(fx, fy, cx, cy, tx, ty, rects) {
+  if (rects.length === 0) {
+    return false;
+  }
+
+  const samples = 28;
+
+  for (let i = 1; i < samples; i += 1) {
+    const t = i / samples;
+    const x = quadraticPointAt(t, fx, cx, tx);
+    const y = quadraticPointAt(t, fy, cy, ty);
+
+    for (const rect of rects) {
+      if (isPointInRect(x, y, rect)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function getCurvedLinkPath(fx, fy, tx, ty, fromId, toId, entities) {
+  const dx = tx - fx;
+  const dy = ty - fy;
+  const distance = Math.hypot(dx, dy);
+
+  if (distance < 1) {
+    return {
+      cx: (fx + tx) / 2,
+      cy: (fy + ty) / 2,
+      mx: (fx + tx) / 2,
+      my: (fy + ty) / 2
+    };
+  }
+
+  const obstacleRects = entities
+    .filter(entity => entity.id !== fromId && entity.id !== toId)
+    .map(entity => getNodeRect(entity, 8));
+
+  const midX = (fx + tx) / 2;
+  const lowY = Math.max(fy, ty);
+  const baseSag = Math.min(140, Math.max(34, distance * 0.24));
+  const lateralCandidates = [0, 90, -90, 150, -150, 220, -220];
+  const extraSagCandidates = [0, 34, 68, 102];
+
+  let cx = midX;
+  let cy = lowY + baseSag;
+
+  for (const extraSag of extraSagCandidates) {
+    for (const lateral of lateralCandidates) {
+      const candidateCx = midX + lateral;
+      const candidateCy = lowY + baseSag + extraSag;
+
+      if (!doesBezierHitRects(fx, fy, candidateCx, candidateCy, tx, ty, obstacleRects)) {
+        cx = candidateCx;
+        cy = candidateCy;
+        extraSagCandidates.length = 0;
+        break;
+      }
+    }
+  }
+
+  const t = 0.5;
+  const oneMinusT = 1 - t;
+  const mx = oneMinusT * oneMinusT * fx + 2 * oneMinusT * t * cx + t * t * tx;
+  const my = oneMinusT * oneMinusT * fy + 2 * oneMinusT * t * cy + t * t * ty;
+
+  return { cx, cy, mx, my };
+}
+
 function draw() {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
@@ -784,13 +1025,14 @@ function draw() {
     ctx.strokeStyle = colors[link.type] || "#8ca0c5";
     ctx.lineWidth = link.type === "weak" ? 1.2 : 2;
     ctx.setLineDash(link.type === "theory" ? [8, 5] : link.type === "weak" ? [4, 4] : []);
+    const curvePath = getCurvedLinkPath(fx, fy, tx, ty, from.id, to.id, state.board.entities);
     ctx.beginPath();
     ctx.moveTo(fx, fy);
-    ctx.lineTo(tx, ty);
+    ctx.quadraticCurveTo(curvePath.cx, curvePath.cy, tx, ty);
     ctx.stroke();
 
-    const mx = (fx + tx) / 2;
-    const my = (fy + ty) / 2;
+    const mx = curvePath.mx;
+    const my = curvePath.my;
 
     ctx.setLineDash([]);
     ctx.fillStyle = "#102246";
@@ -1015,25 +1257,52 @@ function findScreenshotAtScreen(x, y, nodeId = null) {
   return null;
 }
 
-function queueSave() {
+function buildSavePayload() {
+  return {
+    ...state.board,
+    camera: {
+      x: state.camera.x,
+      y: state.camera.y,
+      zoom: state.camera.zoom
+    }
+  };
+}
+
+function getSaveFingerprint(payload) {
+  return JSON.stringify({
+    _id: payload._id,
+    entities: payload.entities,
+    links: payload.links,
+    camera: payload.camera
+  });
+}
+
+function queueSave(mode = "edit") {
+  const delay = mode === "movement" ? SAVE_DELAY_MOVEMENT_MS : SAVE_DELAY_EDIT_MS;
+
   if (state.saveTimer) {
     clearTimeout(state.saveTimer);
   }
 
-  state.saveTimer = setTimeout(saveBoard, 220);
+  state.saveTimer = setTimeout(saveBoard, delay);
 }
 
 async function saveBoard() {
-  try {
-    const payloadToSave = {
-      ...state.board,
-      camera: {
-        x: state.camera.x,
-        y: state.camera.y,
-        zoom: state.camera.zoom
-      }
-    };
+  if (state.saveInFlight) {
+    queueSave("edit");
+    return;
+  }
 
+  const payloadToSave = buildSavePayload();
+  const fingerprint = getSaveFingerprint(payloadToSave);
+
+  if (fingerprint === state.lastSavedFingerprint) {
+    return;
+  }
+
+  state.saveInFlight = true;
+
+  try {
     const response = await fetch(`/api/boards/${MASTER_BOARD_ID}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1047,10 +1316,13 @@ async function saveBoard() {
     const payload = await response.json();
     state.board = payload;
     state.camera = normalizeCameraInput(payload.camera, state.camera);
+    state.lastSavedFingerprint = getSaveFingerprint(buildSavePayload());
     renderSelectedNodeEditor();
     setStatus("Saved");
   } catch (error) {
     setStatus(`Save error: ${error.message || "unknown"}`);
+  } finally {
+    state.saveInFlight = false;
   }
 }
 
@@ -1065,6 +1337,7 @@ async function loadBoard() {
     const payload = await response.json();
     state.board = payload;
     state.camera = normalizeCameraInput(payload.camera, state.camera);
+    state.lastSavedFingerprint = getSaveFingerprint(buildSavePayload());
     state.selectedNodeId = null;
     renderSelectedNodeEditor();
     setStatus("Loaded master board");
@@ -1228,9 +1501,10 @@ function startConnectFromEntity(entityId) {
 }
 
 function resetCamera() {
+  stopZoomAnimation();
   state.camera = { x: 0, y: 0, zoom: 1 };
   draw();
-  queueSave();
+  queueSave("movement");
   setStatus("View reset");
 }
 
@@ -1507,6 +1781,8 @@ function createLink(fromEntity, toEntity) {
 }
 
 canvas.addEventListener("pointerdown", event => {
+  stopZoomAnimation();
+  stopPanGlide();
   hideContextMenu();
 
   if (event.button === 2) {
@@ -1518,6 +1794,11 @@ canvas.addEventListener("pointerdown", event => {
     state.panning = true;
     state.pointerStart = { x: event.offsetX, y: event.offsetY };
     state.cameraStart = { x: state.camera.x, y: state.camera.y };
+    state.panTrack.lastX = event.offsetX;
+    state.panTrack.lastY = event.offsetY;
+    state.panTrack.lastTime = performance.now();
+    state.panTrack.velocityX = 0;
+    state.panTrack.velocityY = 0;
     canvas.setPointerCapture(event.pointerId);
     updateCanvasCursor();
     setStatus("Panning view");
@@ -1603,6 +1884,11 @@ canvas.addEventListener("pointerdown", event => {
     state.panning = true;
     state.pointerStart = { x: event.offsetX, y: event.offsetY };
     state.cameraStart = { x: state.camera.x, y: state.camera.y };
+    state.panTrack.lastX = event.offsetX;
+    state.panTrack.lastY = event.offsetY;
+    state.panTrack.lastTime = performance.now();
+    state.panTrack.velocityX = 0;
+    state.panTrack.velocityY = 0;
     setStatus("Panning view");
   } else {
     state.selectionBox.active = true;
@@ -1634,7 +1920,7 @@ canvas.addEventListener("pointermove", event => {
 
     syncSelectedNodePositionFields();
     draw();
-    queueSave();
+    queueSave("movement");
     return;
   }
 
@@ -1645,14 +1931,29 @@ canvas.addEventListener("pointermove", event => {
   }
 
   if (state.panning) {
+    const now = performance.now();
+    const dt = Math.max(1, now - state.panTrack.lastTime);
+    const deltaX = event.offsetX - state.panTrack.lastX;
+    const deltaY = event.offsetY - state.panTrack.lastY;
+
+    state.panTrack.velocityX = deltaX / dt;
+    state.panTrack.velocityY = deltaY / dt;
+    state.panTrack.lastX = event.offsetX;
+    state.panTrack.lastY = event.offsetY;
+    state.panTrack.lastTime = now;
+
     state.camera.x = state.cameraStart.x + (event.offsetX - state.pointerStart.x);
     state.camera.y = state.cameraStart.y + (event.offsetY - state.pointerStart.y);
     draw();
-    queueSave();
+    queueSave("movement");
   }
 });
 
 canvas.addEventListener("pointerup", event => {
+  const shouldStartGlide = state.panning;
+  const glideVelocityX = state.panTrack.velocityX;
+  const glideVelocityY = state.panTrack.velocityY;
+
   if (state.selectionBox.active) {
     const rect = getSelectionBoxWorldRect();
     const isClick = rect.w < 4 / state.camera.zoom && rect.h < 4 / state.camera.zoom;
@@ -1689,6 +1990,10 @@ canvas.addEventListener("pointerup", event => {
   }
   updateCanvasCursor();
   draw();
+
+  if (shouldStartGlide) {
+    startPanGlide(glideVelocityX, glideVelocityY);
+  }
 });
 
 canvas.addEventListener("auxclick", event => {
@@ -1770,19 +2075,19 @@ canvas.addEventListener("contextmenu", event => {
 
 canvas.addEventListener("wheel", event => {
   event.preventDefault();
+  stopPanGlide();
 
+  const baseZoom = state.zoomAnimation.active ? state.zoomAnimation.targetZoom : state.camera.zoom;
+  const baseX = state.zoomAnimation.active ? state.zoomAnimation.targetX : state.camera.x;
+  const baseY = state.zoomAnimation.active ? state.zoomAnimation.targetY : state.camera.y;
   const zoomFactor = event.deltaY < 0 ? 1.08 : 0.92;
-  const nextZoom = Math.max(0.2, Math.min(2.4, state.camera.zoom * zoomFactor));
+  const nextZoom = Math.max(0.2, Math.min(2.4, baseZoom * zoomFactor));
+  const mouseWorldX = (event.offsetX - baseX) / baseZoom;
+  const mouseWorldY = (event.offsetY - baseY) / baseZoom;
+  const nextX = event.offsetX - mouseWorldX * nextZoom;
+  const nextY = event.offsetY - mouseWorldY * nextZoom;
 
-  const mouseWorldBefore = screenToWorld(event.offsetX, event.offsetY);
-  state.camera.zoom = nextZoom;
-  const mouseWorldAfter = screenToWorld(event.offsetX, event.offsetY);
-
-  state.camera.x += (mouseWorldAfter.x - mouseWorldBefore.x) * state.camera.zoom;
-  state.camera.y += (mouseWorldAfter.y - mouseWorldBefore.y) * state.camera.zoom;
-
-  draw();
-  queueSave();
+  startZoomAnimation(nextZoom, nextX, nextY);
 }, { passive: false });
 
 canvas.addEventListener("dragover", event => {
